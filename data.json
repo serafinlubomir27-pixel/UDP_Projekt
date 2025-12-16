@@ -1,0 +1,7 @@
+[
+    {"id": "A", "name": "Analýza požadavků", "duration": 3, "predecessors": []},
+    {"id": "B", "name": "Návrh architektury", "duration": 2, "predecessors": ["A"]},
+    {"id": "C", "name": "Vývoj backendu", "duration": 5, "predecessors": ["B"]},
+    {"id": "D", "name": "Vývoj frontendu", "duration": 4, "predecessors": ["B"]},
+    {"id": "E", "name": "Testování", "duration": 3, "predecessors": ["C", "D"]}
+]
