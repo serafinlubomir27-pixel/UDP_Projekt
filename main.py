@@ -1,86 +1,120 @@
 import json
 
 
-# --- 1. Trieda pre Aktivitu (Activity) ---
+# --- 1. Trieda pre Aktivitu (Activity) - "Múdrejšia" verzia ---
 class Activity:
     def __init__(self, id, name, duration, predecessors=None):
         self.id = id
         self.name = name
         self.duration = duration
-        # Ak nemá predchodcov, vytvoríme prázdny zoznam
         self.predecessors = predecessors if predecessors else []
-        self.successors = []  # Doplníme automaticky pri stavbe siete
+        self.successors = []
 
-        # Vypočítané hodnoty (Early Start/Finish, Late Start/Finish)
-        self.ES = 0  # Najskorší začiatok
-        self.EF = 0  # Najskorší koniec
-        self.LS = float('inf')  # Najneskorší začiatok
-        self.LF = float('inf')  # Najneskorší koniec
-        self.is_critical = False  # Príznak kritickej cesty
+        # Hodnoty pre CPM
+        self.ES = 0
+        self.EF = 0
+        self.LS = float('inf')
+        self.LF = float('inf')
+        self.is_critical = False
 
     def __repr__(self):
-        return f"[{self.id}] {self.name} (Trvanie: {self.duration})"
+        return f"[{self.id}] {self.name} (Trv: {self.duration})"
+
+    # --- Nové metódy pre zapuzdrenie výpočtov (podľa rady učiteľa) ---
+
+    def calculate_early(self, max_predecessor_ef):
+        """Vypočíta ES a EF na základe predchodcov."""
+        self.ES = max_predecessor_ef
+        self.EF = self.ES + self.duration
+
+        # Jednoduchá kontrola (sanity check)
+        if self.EF < self.ES:
+            raise ValueError(f"Chyba v aktivite {self.id}: EF nemôže byť menšie ako ES.")
+
+    def calculate_late(self, min_successor_ls, project_deadline=None):
+        """Vypočíta LF a LS. Ak nemá nasledovníkov, použije deadline projektu."""
+        if not self.successors and project_deadline is not None:
+            self.LF = project_deadline
+        else:
+            self.LF = min_successor_ls
+
+        self.LS = self.LF - self.duration
+
+        # Kontrola, či LS nie je záporné (teoreticky možné len pri chybnom zadaní)
+        if self.LS < 0:
+            print(f"Varovanie: Aktivita {self.id} má záporný LS ({self.LS}). Skontrolujte väzby.")
+
+    def calculate_float(self):
+        """Vypočíta rezervu a určí, či je kritická."""
+        total_float = self.LS - self.ES
+        # Zaokrúhlenie kvôli desatinným chybám (float precision)
+        if round(total_float, 2) == 0:
+            self.is_critical = True
+        else:
+            self.is_critical = False
+        return total_float
 
 
 # --- 2. Trieda pre Sieť (Network) ---
 class Network:
     def __init__(self):
-        self.activities = {}  # Slovník: id -> objekt Activity
+        self.activities = {}  # id -> Activity
 
-    def add_activity(self, activity):
+    def add_activity_object(self, activity):
         self.activities[activity.id] = activity
 
+    def get_all_activities(self):
+        return self.activities.values()
+
     def calculate_cpm(self):
-        """Hlavná metóda spúšťajúca algoritmy CPM."""
+        """Riadi algoritmus dopredného a spätného priechodu."""
         ids = list(self.activities.keys())
 
         # --- A. Dopredný priechod (Forward Pass) ---
-        # Pravidlo: ES = max(EF predchodcov), EF = ES + trvanie
         for aid in ids:
             act = self.activities[aid]
-            if not act.predecessors:
-                # Ak nemá predchodcu, začína v čase 0
-                act.ES = 0
-            else:
-                # Nájdeme maximálny EF zo všetkých predchodcov
-                max_prev_ef = 0
-                for pred_id in act.predecessors:
-                    if pred_id in self.activities:
-                        max_prev_ef = max(max_prev_ef, self.activities[pred_id].EF)
-                act.ES = max_prev_ef
 
-            # Výpočet skorého konca
-            act.EF = act.ES + act.duration
+            # Zistíme max EF predchodcov
+            max_prev_ef = 0
+            if act.predecessors:
+                # Využívame list comprehension pre čistotu kódu
+                predecessor_efs = [
+                    self.activities[p_id].EF
+                    for p_id in act.predecessors
+                    if p_id in self.activities
+                ]
+                if predecessor_efs:
+                    max_prev_ef = max(predecessor_efs)
+
+            # Necháme aktivitu, nech si vypočíta svoje časy (zapuzdrenie)
+            act.calculate_early(max_prev_ef)
 
         # --- B. Spätný priechod (Backward Pass) ---
-        # Najprv zistíme dĺžku celého projektu (max EF zo všetkých)
         project_duration = max(a.EF for a in self.activities.values())
 
-        # Prechádzame poľom odzadu
         for aid in reversed(ids):
             act = self.activities[aid]
 
-            # Ak nemá nasledovníkov, jeho LF je koniec projektu
-            if not act.successors:
-                act.LF = project_duration
-            else:
-                # Nájdeme minimálny LS zo všetkých nasledovníkov
-                min_next_ls = float('inf')
-                for succ_id in act.successors:
-                    if succ_id in self.activities:
-                        min_next_ls = min(min_next_ls, self.activities[succ_id].LS)
-                act.LF = min_next_ls
+            # Zistíme min LS nasledovníkov
+            min_next_ls = float('inf')
 
-            # Výpočet neskorého začiatku
-            act.LS = act.LF - act.duration
+            # Ak má nasledovníkov, nájdeme minimum
+            if act.successors:
+                successor_ls_values = [
+                    self.activities[s_id].LS
+                    for s_id in act.successors
+                    if s_id in self.activities
+                ]
+                if successor_ls_values:
+                    min_next_ls = min(successor_ls_values)
 
-            # Určenie kritickej cesty (ak je rezerva 0)
-            # Rezerva (Float) = LS - ES
-            if (act.LS - act.ES) == 0:
-                act.is_critical = True
+            # Necháme aktivitu vypočítať si LS a LF
+            act.calculate_late(min_next_ls, project_deadline=project_duration)
+
+            # Výpočet rezervy
+            act.calculate_float()
 
     def print_results(self):
-        """Výpis výsledkov do tabuľky."""
         print(f"{'ID':<5} {'Názov':<20} {'Trv':<5} {'ES':<5} {'EF':<5} {'LS':<5} {'LF':<5} {'Kritická?'}")
         print("-" * 75)
         for act in self.activities.values():
@@ -89,71 +123,87 @@ class Network:
                 f"{act.id:<5} {act.name:<20} {act.duration:<5} {act.ES:<5} {act.EF:<5} {act.LS:<5} {act.LF:<5} {crit}")
 
 
-# --- 3. Návrhový vzor Builder ---
+# --- 3. Vylepšený Builder (Fluent Interface) ---
 class NetworkBuilder:
     def __init__(self):
         self._network = Network()
+        self._temp_data = []  # Dočasné úložisko pre JSON dáta
+
+    def add_activity(self, id, name, duration, predecessors=None):
+        """Pridá aktivitu do siete. Vracia self pre reťazenie (Fluent Interface)."""
+        act = Activity(id, name, duration, predecessors)
+        self._network.add_activity_object(act)
+        return self  # <-- Toto chcel učiteľ (vracia staviteľa späť)
 
     def load_from_json(self, filepath):
-        """Načíta dáta zo súboru a ošetrí chyby (Try/Except)."""
+        """Načíta JSON, ale zatiaľ len uloží dáta. Stavba prebehne až pri build()."""
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # Validácia: dáta musia byť zoznam
             if not isinstance(data, list):
-                raise ValueError("JSON musí obsahovať zoznam aktivít.")
+                raise ValueError("JSON musí byť zoznam.")
 
-            # 1. Krok: Vytvorenie objektov aktivít
-            for item in data:
-                # Ošetrenie chýbajúcich kľúčov
-                if 'id' not in item or 'duration' not in item:
-                    print(f"Varovanie: Preskakujem neplatný záznam: {item}")
-                    continue
+            self._temp_data = data
+            return self  # Opäť vraciame self
 
-                act = Activity(
-                    id=item['id'],
-                    name=item.get('name', 'Nepomenovaná'),
-                    duration=item['duration'],
-                    predecessors=item.get('predecessors', [])
-                )
-                self._network.add_activity(act)
-
-            # 2. Krok: Prepojenie nasledovníkov (Successors) pre spätný priechod
-            # Prechádzame aktivity a 'oznámime' predchodcom, kto je ich nasledovník
-            for act in self._network.activities.values():
-                for pred_id in act.predecessors:
-                    if pred_id in self._network.activities:
-                        self._network.activities[pred_id].successors.append(act.id)
-
-            return True
-
-        except FileNotFoundError:
-            print("CHYBA: Súbor nebol nájdený. Skontrolujte názov 'data.json'.")
-            return False
-        except json.JSONDecodeError:
-            print("CHYBA: Súbor nie je validný JSON (chyba syntaxe).")
-            return False
         except Exception as e:
-            print(f"CHYBA: Nastala neočakávaná chyba: {e}")
-            return False
+            print(f"CHYBA pri čítaní JSON: {e}")
+            self._temp_data = []
+            return self
 
-    def get_network(self):
+    def _link_successors(self):
+        """Pomocná metóda na prepojenie nasledovníkov (interná logika)."""
+        for act in self._network.activities.values():
+            for pred_id in act.predecessors:
+                if pred_id in self._network.activities:
+                    self._network.activities[pred_id].successors.append(act.id)
+
+    def build(self):
+        """
+        Finálna metóda:
+        1. Spracuje načítané dáta (ak sú).
+        2. Prepojí vzťahy (successors).
+        3. Môže automaticky spustiť výpočet CPM.
+        4. Vráti hotovú sieť.
+        """
+        # Spracovanie dát z JSONu (ak sme použili load_from_json)
+        for item in self._temp_data:
+            if 'id' in item and 'duration' in item:
+                self.add_activity(
+                    item['id'],
+                    item.get('name', 'N/A'),
+                    item['duration'],
+                    item.get('predecessors', [])
+                )
+
+        # Prepojenie grafu
+        self._link_successors()
+
+        # Učiteľov tip: Builder môže rovno aktualizovať sieť o výpočty
+        # Takže tu môžeme zavolať calculate_cpm(), aby užívateľ dostal hotovú vec.
+        if self._network.activities:
+            self._network.calculate_cpm()
+
         return self._network
 
 
-# --- 4. Hlavné spustenie (Main) ---
+# --- 4. Hlavné spustenie ---
 if __name__ == "__main__":
-    # Vytvorenie inštancie Buildera
+    # Použitie vylepšeného Buildera
+    # Všimni si, ako môžeme metódy reťaziť (aj keď tu voláme load a build oddelene pre prehľadnosť)
+
     builder = NetworkBuilder()
 
-    # Načítanie dát
-    if builder.load_from_json("data.json"):
-        print("Dáta úspešne načítané. Spúšťam výpočet CPM...\n")
+    # "Fluent" zápis by mohol vyzerať aj takto:
+    # network = builder.load_from_json("data.json").build()
 
-        # Získanie siete a výpočet
-        network = builder.get_network()
-        network.calculate_cpm()
+    # Klasický zápis:
+    builder.load_from_json("data.json")
+    network = builder.build()
 
-        # Výpis
+    if network.activities:
+        print("Sieť úspešne postavená a vypočítaná.\n")
         network.print_results()
+    else:
+        print("Nepodarilo sa vytvoriť sieť (chyba v dátach alebo prázdny súbor).")
